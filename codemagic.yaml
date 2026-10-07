@@ -1,1 +1,28 @@
 
+workflows:
+  android-debug:
+    name: Gerador Achadinhos Pro - APK
+    max_build_duration: 120
+    instance_type: linux_x2
+
+    scripts:
+      - name: Configurar Android SDK
+        script: |
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > "$CM_BUILD_DIR/local.properties"
+
+      - name: Instalar Gradle
+        script: |
+          wget -q https://services.gradle.org/distributions/gradle-9.6-bin.zip
+          unzip -q gradle-9.6-bin.zip
+          export GRADLE_HOME="$CM_BUILD_DIR/gradle-9.6"
+          export PATH="$GRADLE_HOME/bin:$PATH"
+          gradle --version
+
+      - name: Gerar APK de teste
+        script: |
+          export GRADLE_HOME="$CM_BUILD_DIR/gradle-9.6"
+          export PATH="$GRADLE_HOME/bin:$PATH"
+          gradle assembleDebug
+
+    artifacts:
+      - app/build/outputs/apk/debug/app-debug.apk
