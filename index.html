@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gerador de Achadinhos Pro</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 p-4">
+
+    <div class="max-w-md mx-auto bg-white p-6 rounded-2xl shadow-xl">
+        <h1 class="text-xl font-bold mb-4 text-center">Gerenciador de Achadinhos</h1>
+        
+        <input type="text" id="linkProd" placeholder="Cole o link do produto ou o ID da ML (ex: MLB1234567890)..." class="w-full p-4 border rounded-xl mb-3">
+        <input type="text" id="linkCompra" placeholder="Link de compra (Kiwify, Monetizze...) - opcional" class="w-full p-4 border rounded-xl mb-3 text-sm" oninput="toggleImagemManual()">
+        <div id="blocoImagemManual" class="hidden mb-3">
+            <label class="block text-xs text-gray-500 mb-1">Imagem do produto (recomendado para link de compra externo):</label>
+            <input type="file" id="imgManual" accept="image/*" class="w-full p-2 border rounded-xl text-sm">
+            <img id="previewImgManual" class="hidden w-16 h-16 object-cover rounded mt-2">
+        </div>
+        <button onclick="adicionarProduto()" id="btnAdicionar" class="w-full bg-blue-600 text-white py-4 rounded-xl font-bold mb-6">
+            Buscar e Adicionar
+        </button>
+
+        <h2 class="font-bold mb-2">Produtos na lista de exportação:</h2>
+        <div id="lista-prev" class="space-y-3 mb-8"></div>
+
+        <!-- Botões de backup/restore -->
+        <div class="flex gap-2 mb-4">
+            <button onclick="salvarCatalogo()" class="flex-1 bg-indigo-600 text-white py-3 rounded-xl font-bold text-sm shadow flex items-center justify-center gap-1">
+                <span>💾</span> Salvar Catálogo
+            </button>
+            <button onclick="document.getElementById('fileInput').click()" class="flex-1 bg-amber-600 text-white py-3 rounded-xl font-bold text-sm shadow flex items-center justify-center gap-1">
+                <span>📂</span> Restaurar Catálogo
+            </button>
+            <input type="file" id="fileInput" accept=".json" class="hidden" onchange="restaurarCatalogo(event)">
+            <input type="file" id="fileInputTrocarFoto" accept="image/*" class="hidden" onchange="trocarFotoSelecionada(event)">
+        </div>
+
+        <input type="text" id="tituloPagina" placeholder="Título da página (ex: Achadinhos da Maria)" class="w-full p-3 border rounded-xl mb-2 text-sm" oninput="localStorage.setItem('tituloPagina', this.value.trim())">
+        <input type="text" id="subtituloPagina" placeholder="Subtítulo (ex: Ofertas selecionadas todo dia)" class="w-full p-3 border rounded-xl mb-3 text-sm" oninput="localStorage.setItem('subtituloPagina', this.value.trim())">
+
+        <button onclick="gerarArquivo()" class="w-full bg-green-600 text-white py-4 rounded-2xl font-bold text-lg shadow-lg">
+            Gerar Vitrine (achadinhos.html)
+        </button>
+
+        <details class="mt-4 text-xs">
+            <summary class="cursor-pointer text-gray-500 select-none">⚙️ Configuração avançada e registro da última busca</summary>
+            <div class="mt-2 p-3 bg-gray-50 rounded-lg">
+                <label class="block text-gray-500 mb-1">Proxy próprio (opcional — mais confiável que os serviços públicos gratuitos):</label>
+                <input type="text" id="proxyProprio" placeholder="ex: https://seu-worker.workers.dev/?url=" class="w-full p-2 border rounded-lg text-xs mb-1" oninput="localStorage.setItem('proxyProprio', this.value.trim())">
+                <p class="text-gray-400 mb-2">Se preenchido, é tentado ANTES de tudo. Deve receber o link do produto colado no fim da URL e responder em JSON: {"nome":"...","img":"..."}</p>
+                <p class="text-gray-500 font-bold mb-1">Registro da última busca:</p>
+                <div id="logBusca" class="text-[10px] text-gray-500 whitespace-pre-wrap max-h-48 overflow-y-auto border-t pt-2">Nenhuma busca feita ainda.</div>
+            </div>
+        </details>
+    </div>
+
+    <!-- Seletor de imagem do produto -->
+    <div id="modalImagens" class="hidden fixed inset-0 bg-black/60 z-50 flex items-end sm:items-center justify-center p-3" onclick="if(event.target===this)fecharSeletor()">
+        <div class="bg-white rounded-2xl p-4 w-full max-w-md max-h-[85vh] overflow-y-auto">
+            <h3 class="font-bold mb-1">Escolher imagem do produto</h3>
+            <p id="modalNomeProduto" class="text-xs text-gray-500 mb-3 truncate"></p>
+            <div id="modalGrade" class="grid grid-cols-3 gap-2 mb-3"></div>
+            <p id="modalAviso" class="text-xs text-gray-400 mb-3"></p>
+            <div class="flex flex-col gap-2">
+                <button onclick="rebuscarImagens()" id="btnRebuscar" class="w-full bg-blue-600 text-white py-3 rounded-xl font-bold text-sm">🔄 Buscar imagens desta página de novo</button>
+                <button onclick="const i=indexSeletor; fecharSeletor(); trocarFoto(i)" class="w-full bg-purple-600 text-white py-3 rounded-xl font-bold text-sm">📷 Enviar foto do aparelho</button>
+                <button onclick="fecharSeletor()" class="w-full bg-gray-200 text-gray-700 py-3 rounded-xl font-bold text-sm">Fechar</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let vitrine = JSON.parse(localStorage.getItem('vitrine')) || [];
+        let imgManualProcessada = null;
+
+        // --- LOG VISÍVEL DA BUSCA (para diagnosticar exatamente onde/por que falha) ---
+        let logsBuscaAtual = [];
+        function logar(msg) {
+            console.log(msg);
+            logsBuscaAtual.push(msg);
+            const div = document.getElementById('logBusca');
+            if (div) div.textContent = logsBuscaAtual.join('\n');
+        }
+        function reiniciarLog() {
+            logsBuscaAtual = [];
+            const div = document.getElementById('logBusca');
+            if (div) div.textContent = 'Buscando...';
+        }
+        document.addEventListener('DOMContentLoaded', () => {
+            const campoProxy = document.getElementById('proxyProprio');
+            if (campoProxy) campoProxy.value = localStorage.getItem('proxyProprio') || '';
+            document.getElementById('tituloPagina').value = localStorage.getItem('tituloPagina') || '';
+            document.getElementById('subtituloPagina').value = localStorage.getItem('subtituloPagina') || '';
+        });
+
+        function toggleImagemManual() {
+            const linkCompraInput = document.getElementById('linkCompra').value.trim();
+            const bloco = document.getElementById('blocoImagemManual');
+            bloco.classList.toggle('hidden', !linkCompraInput);
+        }
+
+        // Redimensiona/corta a imagem enviada manualmente para o mesmo padrão (quadrado 300x300)
+        // usado pelas imagens obtidas automaticamente na busca, evitando fotos gigantes do celular.
+        function redimensionarImagemParaPadrao(file, tamanho = 300) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = tamanho;
+                        canvas.height = tamanho;
+                        const ctx = canvas.getContext('2d');
+                        // "contain": a foto inteira cabe no quadrado (fundo branco), sem cortar nada
+                        ctx.fillStyle = '#ffffff';
+                        ctx.fillRect(0, 0, tamanho, tamanho);
+                        const escala = Math.min(tamanho / img.width, tamanho / img.height);
+                        const larguraFinal = img.width * escala;
+                        const alturaFinal = img.height * escala;
+                        const x = (tamanho - larguraFinal) / 2;
+                        const y = (tamanho - alturaFinal) / 2;
+                        ctx.drawImage(img, x, y, larguraFinal, alturaFinal);
+                        resolve(canvas.toDataURL('image/jpeg', 0.85));
+                    };
+                    img.onerror = () => reject(new Error("Não foi possível ler a imagem."));
+                    img.src = e.target.result;
+                };
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+            });
+        }
+
+        document.getElementById('imgManual').addEventListener('change', async function(e) {
+            const file = e.target.files[0];
+            const preview = document.getElementById('previewImgManual');
+            if (!file) {
+                imgManualProcessada = null;
+                preview.classList.add('hidden');
+                return;
+            }
+            try {
+                imgManualProcessada = await redimensionarImagemParaPadrao(file);
+                preview.src = imgManualProcessada;
+                preview.classList.remove('hidden');
+            } catch (err) {
+                alert("Erro ao processar a imagem: " + err.message);
+                imgManualProcessada = null;
+                preview.classList.add('hidden');
+            }
+        });
+
+        function lerImagemComoBase64() {
+            return Promise.resolve(imgManualProcessada);
+        }
+
+        function limparImagemManual() {
+            document.getElementById('imgManual').value = '';
+            document.getElementById('previewImgManual').classList.add('hidden');
+            document.getElementById('previewImgManual').src = '';
+            imgManualProcessada = null;
+        }
+
+        function fetchComTimeout(url, ms = 9000) {
+            return Promise.race([
+                fetch(url),
+                new Promise((_, reject) => setTimeout(() => reject(new Error("tempo esgotado")), ms))
+            ]);
+        }
+
+        function extrairImagemDeJsonLd(doc) {
+            try {
+                const scripts = doc.querySelectorAll('script[type="application/ld+json"]');
+                for (const script of scripts) {
+                    const dados = JSON.parse(script.textContent);
+                    const lista = Array.isArray(dados) ? dados : [dados];
+                    for (const item of lista) {
+                        if (item && item.image) {
+                            const img = Array.isArray(item.image) ? item.image[0] : (item.image.url || item.image);
+                            if (img) return img;
+                        }
+                    }
+                }
+            } catch (e) { /* JSON-LD inválido, ignora */ }
+            return null;
+        }
+
+        // Detecta redirecionamentos feitos por JavaScript ou <meta refresh> (comuns em links
+        // curtos de afiliado, como os "/sec/" do Mercado Livre), que um proxy simples não segue.
+        function extrairRedirecionamento(html, urlBase) {
+            let match = html.match(/<meta[^>]*http-equiv=["']refresh["'][^>]*content=["'][^;]*;\s*url=([^"'>]+)["']?/i);
+            if (!match) match = html.match(/window\.location(?:\.href)?\s*=\s*["']([^"']+)["']/i);
+            if (!match) match = html.match(/location\.replace\(\s*["']([^"']+)["']\s*\)/i);
+            if (!match) return null;
+            try {
+                return new URL(match[1], urlBase).href;
+            } catch {
+                return null;
+            }
+        }
+
+        // Extrai o ID do anúncio do Mercado Livre (ex: MLB1234567890), seja de dentro de uma URL
+        // ou digitado diretamente pelo usuário (com ou sem o prefixo "MLB").
+        function extrairIdMercadoLivre(texto) {
+            if (!texto) return null;
+            const t = texto.trim();
+            if (/^MLB-?\d{6,}$/i.test(t)) {
+                return "MLB" + t.replace(/^MLB-?/i, '');
+            }
+            if (/^\d{6,}$/.test(t)) {
+                return "MLB" + t;
+            }
+            const match = t.match(/MLB-?(\d{6,})/i);
+            return match ? "MLB" + match[1] : null;
+        }
+
+        // Resolve a URL final de um link (após todos os redirecionamentos HTTP) usando o modo
+        // JSON do allorigins, que devolve tanto a URL final quanto o HTML da página de destino.
+        async function resolverUrlFinal(link) {
+            try {
+                const res = await fetchComTimeout(`https://api.allorigins.win/get?url=${encodeURIComponent(link)}`);
+                if (!res.ok) return null;
+                const dados = await res.json();
+                return {
+                    urlFinal: dados?.status?.url || null,
+                    html: dados?.contents || null
+                };
+            } catch (e) {
+                console.log("Não foi possível resolver a URL final:", e);
+                return null;
+            }
+        }
+
+        // Se o usuário configurou um proxy próprio (ex: um Cloudflare Worker gratuito), tenta
+        // esse primeiro. Um proxy próprio é muito mais confiável que os serviços públicos
+        // compartilhados abaixo, porque o IP dele não está na lista negra de bloqueio de
+        // sites como Amazon/Shopee (os públicos são usados por milhares de pessoas e acabam
+        // bloqueados com frequência).
+        async function tentarProxyProprio(link) {
+            const base = (localStorage.getItem('proxyProprio') || '').trim();
+            if (!base) return null;
+            try {
+                const res = await fetchComTimeout(base + encodeURIComponent(link), 15000);
+                if (!res.ok) { logar(`Proxy próprio: respondeu com erro ${res.status}`); return null; }
+                const dados = await res.json();
+                const nome = dados.nome || dados.title || null;
+                const img = dados.img || dados.image || null;
+                if (nome || img) { logar(`Proxy próprio: OK (nome=${!!nome}, img=${!!img})`); return { nome, img }; }
+                logar('Proxy próprio: respondeu, mas sem nome nem imagem.');
+            } catch (e) {
+                logar(`Proxy próprio: falhou (${e.message})`);
+            }
+            return null;
+        }
+
+        // Jina AI Reader: outro serviço gratuito que busca a página no servidor dele (sem
+        // esbarrar em CORS) e devolve o conteúdo em texto/markdown, junto com a primeira
+        // imagem encontrada. Útil como mais uma tentativa quando os outros métodos falham.
+        async function tentarJinaReader(link) {
+            try {
+                const res = await fetchComTimeout(`https://r.jina.ai/${link}`, 15000);
+                if (!res.ok) { logar(`Jina Reader: respondeu com erro ${res.status}`); return null; }
+                const texto = await res.text();
+                if (!texto || texto.length < 50) { logar('Jina Reader: resposta vazia.'); return null; }
+                const matchTitulo = texto.match(/Title:\s*(.+)/i);
+                const nome = matchTitulo ? matchTitulo[1].trim() : null;
+                const candidatas = [...texto.matchAll(/!\[[^\]]*\]\((https?:\/\/[^\s)]+)\)/g)]
+                    .map(m => m[1]).filter(imagemPareceProduto).slice(0, 6);
+                if (nome || candidatas.length) { logar(`Jina Reader: título=${!!nome}, ${candidatas.length} imagem(ns) candidata(s)`); return { nome, img: null, candidatas }; }
+                logar('Jina Reader: não achou nome nem imagem no conteúdo.');
+            } catch (e) {
+                logar(`Jina Reader: falhou (${e.message})`);
+            }
+            return null;
+        }
+
+        // A API oficial do Mercado Livre devolve título e fotos em JSON, sem depender de raspar
+        // HTML nem de proxies que o site pode bloquear — muito mais confiável para links da ML,
+        // inclusive links curtos de afiliado (ex: mercadolivre.com/sec/xxxxx), que primeiro
+        // precisam ser resolvidos para achar o ID do anúncio.
+        async function tentarApiMercadoLivre(link) {
+            let idProduto = extrairIdMercadoLivre(link);
+
+            if (!idProduto) {
+                if (!/mercadolivre|mercadolibre|meli\.la/i.test(link)) return null;
+                const resolvido = await resolverUrlFinal(link);
+                if (resolvido) {
+                    idProduto = (resolvido.urlFinal && extrairIdMercadoLivre(resolvido.urlFinal)) ||
+                                (resolvido.html && extrairIdMercadoLivre(resolvido.html));
+                    if (!idProduto && resolvido.html) {
+                        const destinoJs = extrairRedirecionamento(resolvido.html, resolvido.urlFinal || link);
+                        if (destinoJs) idProduto = extrairIdMercadoLivre(destinoJs);
+                    }
+                }
+            }
+
+            if (!idProduto) return null;
+
+            try {
+                const res = await fetchComTimeout(`https://api.mercadolibre.com/items/${idProduto}`);
+                if (!res.ok) return null;
+                const dados = await res.json();
+                if (!dados || dados.error) return null;
+                const nome = dados.title || null;
+                const img = dados.pictures?.[0]?.secure_url || dados.pictures?.[0]?.url || dados.thumbnail || null;
+                const permalink = dados.permalink || null;
+                if (nome || img) return { nome, img, permalink };
+            } catch (e) {
+                console.log("API do Mercado Livre falhou:", e);
+            }
+            return null;
+        }
+
+        // Serviço de "link preview" (Microlink) que busca a página NO SERVIDOR DELE, inclusive
+        // renderizando JavaScript quando preciso, e já devolve título/imagem prontos em JSON.
+        // É mais confiável que os proxies de HTML cru abaixo para sites que montam a página
+        // via JavaScript (ex: Shopee), onde as tags <meta og:image> nem sempre existem no HTML bruto.
+        // Filtro para descartar imagens que claramente NÃO são a foto do produto
+        // (banners de promoção, logos, ícones, selos, GIFs/SVGs etc.).
+        function imagemPareceProduto(url) {
+            if (!url || typeof url !== 'string' || !/^https?:\/\//i.test(url)) return false;
+            if (/logo|banner|sprite|icon|avatar|loyalty|meli-?plus|badge|placeholder|favicon|pixel|tracking|\.svg|\.gif|\/org-img\/|blank\./i.test(url)) return false;
+            return true;
+        }
+
+        async function tentarApiMicrolink(link) {
+            try {
+                const res = await fetchComTimeout(`https://api.microlink.io/?url=${encodeURIComponent(link)}&meta=false`, 15000);
+                if (!res.ok) { logar(`Microlink: erro ${res.status}`); return null; }
+                const dados = await res.json();
+                if (dados?.status !== 'success' || !dados.data) return null;
+                const nome = dados.data.title || null;
+                const imgBruta = dados.data.image?.url || null; // sem fallback de logo do site
+                const img = imagemPareceProduto(imgBruta) ? imgBruta : null;
+                if (imgBruta && !img) logar('Microlink: imagem descartada (parece banner/logo).');
+                if (nome || img) return { nome, img };
+            } catch (e) {
+                logar(`Microlink: falhou (${e.message})`);
+            }
+            return null;
+        }
+
+        // Tenta vários serviços de proxy (links de afiliado costumam redirecionar várias vezes
+        // e nem todo proxy segue os redirecionamentos ou não é bloqueado pelo site de destino)
+        // e várias formas de achar a imagem do produto na página.
+        //
+        // IMPORTANTE: um <iframe> (visível ou invisível) que carregue o link do produto NÃO
+        // resolve isso — sites de terceiros (Mercado Livre, Amazon, Shopee, Kiwify...) rodam em
+        // outro domínio, e o navegador bloqueia o JavaScript da nossa página de ler o conteúdo
+        // de um iframe de outro domínio (Same-Origin Policy). Isso vale mesmo escondendo o
+        // iframe com display:none — a restrição é de segurança do navegador, não de aparência.
+        // Por isso a busca é feita assim: a API oficial do Mercado Livre primeiro, depois o
+        // Microlink (que já faz essa busca no servidor dele, sem esbarrar nessa restrição),
+        // e por fim os proxies de HTML abaixo como última tentativa. Os resultados de cada
+        // etapa se completam: se uma etapa achar só o nome (ou só a imagem), a próxima tenta
+        // preencher o que faltou.
+        async function buscarMetadadosProduto(link) {
+            reiniciarLog();
+            let nome = null, img = null, permalink = null;
+            const candidatas = [];
+            const addCand = (u) => { if (imagemPareceProduto(u) && !candidatas.includes(u)) candidatas.push(u); };
+            const fim = () => ({ nome, img: img || candidatas[0] || null, permalink, candidatas: candidatas.slice(0, 8) });
+
+            logar('Tentando proxy próprio (se configurado)...');
+            const dadosProprio = await tentarProxyProprio(link);
+            if (dadosProprio) {
+                nome = nome || dadosProprio.nome;
+                if (imagemPareceProduto(dadosProprio.img)) { img = img || dadosProprio.img; addCand(dadosProprio.img); }
+                if (nome && img) { logar('✅ Concluído pelo proxy próprio.'); return fim(); }
+            }
+
+            logar('Tentando API oficial do Mercado Livre...');
+            const dadosML = await tentarApiMercadoLivre(link);
+            if (dadosML) {
+                nome = nome || dadosML.nome;
+                permalink = dadosML.permalink || permalink;
+                if (imagemPareceProduto(dadosML.img)) { img = img || dadosML.img; addCand(dadosML.img); }
+                logar(`API Mercado Livre: OK (nome=${!!dadosML.nome}, img=${!!dadosML.img})`);
+                if (nome && img) { logar('✅ Concluído pela API do Mercado Livre.'); return fim(); }
+            } else {
+                logar('API Mercado Livre: não se aplica ou não achou nada.');
+            }
+
+            logar('Tentando Microlink...');
+            const dadosMicrolink = await tentarApiMicrolink(link);
+            if (dadosMicrolink) {
+                nome = nome || dadosMicrolink.nome;
+                if (dadosMicrolink.img) { img = img || dadosMicrolink.img; addCand(dadosMicrolink.img); }
+                logar(`Microlink: OK (nome=${!!dadosMicrolink.nome}, img=${!!dadosMicrolink.img})`);
+                if (nome && img) { logar('✅ Concluído pelo Microlink.'); return fim(); }
+            }
+
+            logar('Tentando proxies de HTML cru (allorigins, corsproxy, codetabs)...');
+            const proxies = [
+                url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+                url => `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
+                url => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`
+            ];
+
+            for (const montarProxy of proxies) {
+                if (nome && img) break;
+                const host = montarProxy('').split('/')[2];
+                try {
+                    let urlAtual = link;
+                    let html = null;
+
+                    // Até 2 saltos: a página original e, se for um redirecionamento por JS/meta, a página final
+                    for (let salto = 0; salto < 2; salto++) {
+                        const res = await fetchComTimeout(montarProxy(urlAtual));
+                        if (!res.ok) { html = null; break; }
+                        const htmlAtual = await res.text();
+                        if (!htmlAtual || htmlAtual.length < 200) { html = null; break; }
+
+                        const destino = extrairRedirecionamento(htmlAtual, urlAtual);
+                        if (destino && destino !== urlAtual) {
+                            urlAtual = destino;
+                            html = htmlAtual;
+                            continue;
+                        }
+                        html = htmlAtual;
+                        break;
+                    }
+
+                    if (!html) { logar(`Proxy ${host}: sem resposta útil`); continue; }
+
+                    const doc = new DOMParser().parseFromString(html, 'text/html');
+
+                    const nomeProxy = doc.querySelector('meta[property="og:title"]')?.content ||
+                                 doc.querySelector('meta[name="twitter:title"]')?.content ||
+                                 doc.querySelector('meta[name="title"]')?.content ||
+                                 doc.querySelector('title')?.textContent ||
+                                 null;
+
+                    // Fontes "oficiais" de imagem da página (og:image etc.), em ordem de confiança
+                    const imgsOficiais = [
+                        doc.querySelector('meta[property="og:image:secure_url"]')?.content,
+                        doc.querySelector('meta[property="og:image"]')?.content,
+                        doc.querySelector('meta[name="twitter:image"]')?.content,
+                        doc.querySelector('meta[itemprop="image"]')?.content,
+                        doc.querySelector('link[rel="image_src"]')?.href,
+                        extrairImagemDeJsonLd(doc)
+                    ].filter(imagemPareceProduto);
+                    imgsOficiais.forEach(addCand);
+                    // Últimas imagens <img> da página, só como opções para você escolher
+                    [...doc.querySelectorAll('img[src^="http"]')].slice(0, 12).map(i => i.src).forEach(addCand);
+
+                    nome = nome || nomeProxy;
+                    if (imgsOficiais[0]) img = img || imgsOficiais[0];
+                    logar(`Proxy ${host}: OK (nome=${!!nomeProxy}, imagem oficial=${!!imgsOficiais[0]})`);
+                } catch (e) {
+                    logar(`Proxy ${host}: falhou (${e.message})`);
+                }
+            }
+
+            // Jina Reader por último: bom para o título, mas suas imagens são só sugestões (nunca a escolha automática)
+            if (!nome || !img) {
+                logar('Tentando Jina Reader (título e sugestões de imagem)...');
+                const dadosJina = await tentarJinaReader(link);
+                if (dadosJina) {
+                    nome = nome || dadosJina.nome;
+                    (dadosJina.candidatas || []).forEach(addCand);
+                }
+            }
+
+            if (!img && candidatas.length) {
+                logar('⚠️ Nenhuma imagem "oficial" encontrada. Toque na miniatura do produto para escolher entre as sugestões.');
+            } else if (!nome && !img) {
+                logar('❌ Nenhuma fonte conseguiu acessar esse link. Sites como Amazon e Shopee costumam bloquear esse tipo de busca automática — use a foto/nome manuais neste caso.');
+            }
+            return fim();
+        }
+
+        // Função principal - usando proxy para buscar meta tags
+        async function adicionarProduto() {
+            const linkProdInput = document.getElementById('linkProd').value.trim();
+            const linkCompraInput = document.getElementById('linkCompra').value.trim();
+            const btn = document.getElementById('btnAdicionar');
+            
+            if(!linkProdInput && !linkCompraInput) return alert("Por favor, cole um link (do produto ou de compra).");
+
+            const link = linkProdInput || linkCompraInput;
+            const idMLDigitado = extrairIdMercadoLivre(link);
+            if(!link.includes('http') && !idMLDigitado) return alert("Link inválido. Cole uma URL completa ou o ID do anúncio da Mercado Livre (ex: MLB1234567890).");
+            if(linkCompraInput && !linkCompraInput.includes('http')) return alert("Link de compra inválido. Cole uma URL completa ou deixe em branco.");
+
+            const imgManualBase64 = await lerImagemComoBase64();
+
+            btn.innerText = "Buscando dados...";
+
+            const { nome: nomeEncontrado, img: imgEncontrada, permalink, candidatas } = await buscarMetadadosProduto(link);
+            const nome = nomeEncontrado || extrairNomeDoLink(link);
+            const img = imgEncontrada || obterImagemPorDominio(link);
+            const linkFinal = permalink || (idMLDigitado ? `https://www.mercadolivre.com.br/p/${idMLDigitado}` : link);
+            const linkCompra = linkCompraInput || linkFinal;
+
+            vitrine.push({
+                nome: nome,
+                img: imgManualBase64 || img,
+                link: linkFinal,
+                linkCompra: linkCompra,
+                candidatas: candidatas || []
+            });
+            localStorage.setItem('vitrine', JSON.stringify(vitrine));
+            renderizar();
+            document.getElementById('linkProd').value = '';
+            document.getElementById('linkCompra').value = '';
+            limparImagemManual();
+            toggleImagemManual();
+
+            btn.innerText = "Buscar e Adicionar";
+        }
+
+        function extrairNomeDoLink(link) {
+            try {
+                const url = new URL(link);
+                const dominio = url.hostname.replace('www.', '');
+                
+                if (dominio.includes('mercadolivre') || dominio.includes('meli.la')) {
+                    const partes = url.pathname.split('/').filter(p => p);
+                    const ultimaParte = partes[partes.length - 1] || '';
+                    if (ultimaParte) {
+                        return `Produto ML ${ultimaParte.replace(/-/g, ' ').substring(0, 30)}`;
+                    }
+                    return "Produto do Mercado Livre";
+                }
+                
+                if (dominio.includes('amazon') || dominio.includes('amzn.to')) {
+                    const partes = url.pathname.split('/').filter(p => p);
+                    const ultimaParte = partes[partes.length - 1] || '';
+                    if (ultimaParte) {
+                        return `Produto Amazon ${ultimaParte.replace(/-/g, ' ').substring(0, 30)}`;
+                    }
+                    return "Produto da Amazon";
+                }
+                
+                if (dominio.includes('shopee')) {
+                    return "Produto da Shopee";
+                }
+                
+                const path = url.pathname.split('/').filter(p => p).join(' ');
+                if (path) {
+                    return `${dominio} - ${path.substring(0, 30)}...`;
+                }
+                
+                return `Produto de ${dominio}`;
+            } catch {
+                return "Produto de Afiliado";
+            }
+        }
+
+        function gerarPlaceholderSVG(texto, corFundo, corTexto) {
+            const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300">
+                <rect width="100%" height="100%" fill="${corFundo}"/>
+                <text x="50%" y="50%" font-family="Arial, sans-serif" font-size="22" font-weight="bold"
+                      fill="${corTexto}" text-anchor="middle" dominant-baseline="middle">${texto}</text>
+            </svg>`;
+            return "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(svg)));
+        }
+
+        function obterImagemPorDominio(link) {
+            try {
+                const url = new URL(link);
+                const dominio = url.hostname.replace('www.', '');
+                
+                if (dominio.includes('mercadolivre') || dominio.includes('meli.la')) {
+                    return gerarPlaceholderSVG("Mercado Livre", "#FFF5E6", "#FF6B00");
+                }
+                if (dominio.includes('amazon') || dominio.includes('amzn.to')) {
+                    return gerarPlaceholderSVG("Amazon", "#232F3E", "#FFFFFF");
+                }
+                if (dominio.includes('shopee')) {
+                    return gerarPlaceholderSVG("Shopee", "#EE4D2D", "#FFFFFF");
+                }
+                if (dominio.includes('kiwify')) {
+                    return gerarPlaceholderSVG("Kiwify", "#1A1A2E", "#00D084");
+                }
+                if (dominio.includes('monetizze')) {
+                    return gerarPlaceholderSVG("Monetizze", "#1A1A2E", "#FFC107");
+                }
+                return gerarPlaceholderSVG("Produto", "#cccccc", "#ffffff");
+            } catch {
+                return gerarPlaceholderSVG("Produto", "#cccccc", "#ffffff");
+            }
+        }
+
+        function renderizar() {
+            const listaDiv = document.getElementById('lista-prev');
+            listaDiv.innerHTML = vitrine.map((item, index) => {
+                const temLinkProprio = item.linkCompra && item.linkCompra !== item.link;
+                return `
+                <div class="flex items-center gap-2 border-b pb-2">
+                    <img src="${item.img}" onclick="abrirSeletorImagem(${index})" title="Toque para escolher outra imagem" onerror="this.onerror=null;this.src=gerarPlaceholderSVG('Produto','#cccccc','#ffffff')" class="w-12 h-12 object-contain bg-white border rounded cursor-pointer">
+                    <div class="flex-1 truncate">
+                        <p class="text-xs truncate">${item.nome}</p>
+                        <p class="text-[10px] ${temLinkProprio ? 'text-green-600' : 'text-gray-400'}">${temLinkProprio ? '🔗 link de compra próprio' : 'usa o link do produto'}</p>
+                    </div>
+                    <button onclick="trocarFoto(${index})" class="text-purple-600 font-bold px-2" title="Trocar foto">📷</button>
+                    <button onclick="editarNome(${index})" class="text-amber-600 font-bold px-2" title="Editar nome">✏️</button>
+                    <button onclick="editarLink(${index})" class="text-teal-600 font-bold px-2" title="Editar link do produto">🌐</button>
+                    <button onclick="editarLinkCompra(${index})" class="text-blue-500 font-bold px-2" title="Editar link de compra">🔗</button>
+                    <button onclick="remover(${index})" class="text-red-500 font-bold px-2">X</button>
+                </div>
+            `;
+            }).join('');
+        }
+
+        // --- SELETOR DE IMAGEM (escolher entre as imagens encontradas na página do produto) ---
+        let indexSeletor = null;
+
+        function abrirSeletorImagem(index) {
+            indexSeletor = index;
+            renderizarSeletor();
+            document.getElementById('modalImagens').classList.remove('hidden');
+        }
+
+        function fecharSeletor() {
+            document.getElementById('modalImagens').classList.add('hidden');
+            indexSeletor = null;
+        }
+
+        function renderizarSeletor() {
+            const item = vitrine[indexSeletor];
+            if (!item) return;
+            document.getElementById('modalNomeProduto').textContent = item.nome;
+            const lista = (item.candidatas || []).slice();
+            const grade = document.getElementById('modalGrade');
+            const aviso = document.getElementById('modalAviso');
+            if (!lista.length) {
+                grade.innerHTML = '';
+                aviso.textContent = 'Nenhuma sugestão guardada para este produto. Use "Buscar imagens desta página de novo" ou envie uma foto do aparelho.';
+                return;
+            }
+            aviso.textContent = 'Toque na imagem que corresponde ao produto.';
+            grade.innerHTML = lista.map((u, i) => `
+                <img src="${u}" data-i="${i}" onclick="escolherImagem(${i})"
+                     onerror="this.style.display='none'"
+                     class="w-full h-24 object-cover rounded-lg border-2 ${u === item.img ? 'border-blue-600' : 'border-transparent'} cursor-pointer">
+            `).join('');
+        }
+
+        function escolherImagem(i) {
+            const item = vitrine[indexSeletor];
+            if (!item || !item.candidatas[i]) return;
+            item.img = item.candidatas[i];
+            localStorage.setItem('vitrine', JSON.stringify(vitrine));
+            renderizar();
+            fecharSeletor();
+        }
+
+        async function rebuscarImagens() {
+            const item = vitrine[indexSeletor];
+            if (!item) return;
+            const btn = document.getElementById('btnRebuscar');
+            btn.textContent = 'Buscando...';
+            btn.disabled = true;
+            try {
+                const dados = await buscarMetadadosProduto(item.link);
+                const juntas = [...(dados.candidatas || []), ...(item.candidatas || [])];
+                item.candidatas = [...new Set(juntas)].slice(0, 12);
+                localStorage.setItem('vitrine', JSON.stringify(vitrine));
+                renderizarSeletor();
+            } catch (e) {
+                alert('Não foi possível buscar de novo: ' + e.message);
+            }
+            btn.textContent = '🔄 Buscar imagens desta página de novo';
+            btn.disabled = false;
+        }
+        // --- FIM SELETOR DE IMAGEM ---
+
+        function editarLink(index) {
+            const atual = vitrine[index].link;
+            const novo = prompt("Link do produto (usado para buscar nome/foto):", atual);
+            if (novo === null) return;
+            const valor = novo.trim();
+            if (!valor || !valor.includes('http')) {
+                alert("Link inválido. Cole uma URL completa.");
+                return;
+            }
+            const usavaMesmoLink = vitrine[index].linkCompra === vitrine[index].link;
+            vitrine[index].link = valor;
+            if (usavaMesmoLink) {
+                vitrine[index].linkCompra = valor;
+            }
+            localStorage.setItem('vitrine', JSON.stringify(vitrine));
+            renderizar();
+        }
+
+        function editarNome(index) {
+            const atual = vitrine[index].nome;
+            const novo = prompt("Nome do produto:", atual);
+            if (novo === null) return;
+            const valor = novo.trim();
+            if (!valor) {
+                alert("O nome não pode ficar em branco.");
+                return;
+            }
+            vitrine[index].nome = valor;
+            localStorage.setItem('vitrine', JSON.stringify(vitrine));
+            renderizar();
+        }
+
+        // --- TROCAR FOTO MANUALMENTE DE UM PRODUTO JÁ ADICIONADO ---
+        let indexTrocandoFoto = null;
+
+        function trocarFoto(index) {
+            indexTrocandoFoto = index;
+            document.getElementById('fileInputTrocarFoto').click();
+        }
+
+        async function trocarFotoSelecionada(event) {
+            const file = event.target.files[0];
+            event.target.value = ''; // permite selecionar o mesmo arquivo de novo depois
+            if (!file || indexTrocandoFoto === null) return;
+            try {
+                const novaImagem = await redimensionarImagemParaPadrao(file);
+                vitrine[indexTrocandoFoto].img = novaImagem;
+                localStorage.setItem('vitrine', JSON.stringify(vitrine));
+                renderizar();
+            } catch (err) {
+                alert("Erro ao processar a imagem: " + err.message);
+            }
+            indexTrocandoFoto = null;
+        }
+        // --- FIM TROCAR FOTO ---
+
+        function editarLinkCompra(index) {
+            const atual = vitrine[index].linkCompra || vitrine[index].link;
+            const novo = prompt("Link de compra (Kiwify, Monetizze, etc.) para este produto:", atual);
+            if (novo === null) return;
+            const valor = novo.trim();
+            if (valor && !valor.includes('http')) {
+                alert("Link inválido. Cole uma URL completa.");
+                return;
+            }
+            vitrine[index].linkCompra = valor || vitrine[index].link;
+            localStorage.setItem('vitrine', JSON.stringify(vitrine));
+            renderizar();
+        }
+
+        function remover(index) {
+            vitrine.splice(index, 1);
+            localStorage.setItem('vitrine', JSON.stringify(vitrine));
+            renderizar();
+        }
+
+        // --- NOVAS FUNÇÕES: SALVAR E RESTAURAR CATÁLOGO ---
+
+        function salvarCatalogo() {
+            if (vitrine.length === 0) {
+                alert("O catálogo está vazio. Adicione produtos antes de salvar.");
+                return;
+            }
+            const dados = JSON.stringify(vitrine, null, 2);
+            const blob = new Blob([dados], { type: 'application/json' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = `catalogo_${new Date().toISOString().slice(0,10)}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+
+        function restaurarCatalogo(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const dados = JSON.parse(e.target.result);
+                    if (!Array.isArray(dados) || dados.some(item => !item.nome || !item.link)) {
+                        alert("Arquivo inválido. Certifique-se de que é um JSON exportado pelo sistema.");
+                        return;
+                    }
+                    if (vitrine.length > 0) {
+                        if (!confirm("Isso substituirá a lista atual. Continuar?")) {
+                            return;
+                        }
+                    }
+                    vitrine = dados;
+                    localStorage.setItem('vitrine', JSON.stringify(vitrine));
+                    renderizar();
+                    alert(`Catálogo restaurado com ${vitrine.length} produtos.`);
+                } catch (err) {
+                    alert("Erro ao ler o arquivo: " + err.message);
+                }
+            };
+            reader.readAsText(file);
+            // Limpa o input para permitir selecionar o mesmo arquivo novamente
+            event.target.value = '';
+        }
+
+        // --- FIM DAS NOVAS FUNÇÕES ---
+
+        function gerarArquivo() {
+            if(vitrine.length === 0) return alert("Adicione produtos primeiro!");
+
+            const placeholderPadrao = gerarPlaceholderSVG("Produto", "#cccccc", "#ffffff");
+
+            const esc = t => String(t || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+            const titulo = esc(localStorage.getItem('tituloPagina') || 'Ofertas Imperdíveis');
+            const subtitulo = esc(localStorage.getItem('subtituloPagina') || 'Selecionamos o melhor para você economizar');
+
+            const html = `<!DOCTYPE html>
+<html lang="pt-br" class="scroll-smooth">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>${titulo}</title>
+<script src="https://cdn.tailwindcss.com"><\/script>
+<style>.card{transition:transform .2s,box-shadow .2s}.card:hover{transform:translateY(-4px);box-shadow:0 12px 28px rgba(79,70,229,.18)}.card:active{transform:scale(.98)}</style>
+</head>
+<body class="bg-slate-50 text-slate-800 antialiased">
+<header class="bg-gradient-to-br from-indigo-700 via-purple-600 to-pink-500 text-white">
+  <div class="max-w-5xl mx-auto px-5 pt-14 pb-20 text-center">
+    <span class="inline-block bg-white/20 text-xs font-bold tracking-wider uppercase px-3 py-1 rounded-full mb-4">🔥 Seleção especial</span>
+    <h1 class="text-3xl md:text-5xl font-black leading-tight mb-3">${titulo}</h1>
+    <p class="text-white/85 md:text-lg max-w-xl mx-auto mb-7">${subtitulo}</p>
+    <a href="#produtos" class="inline-block bg-white text-indigo-700 font-extrabold px-8 py-3.5 rounded-full shadow-lg">Ver ofertas ↓</a>
+  </div>
+</header>
+<section class="max-w-5xl mx-auto px-4 -mt-10">
+  <div class="grid grid-cols-3 gap-2 md:gap-4 bg-white rounded-2xl shadow-lg p-4 text-center text-[11px] md:text-sm font-semibold">
+    <div><div class="text-2xl mb-1">✅</div>Produtos selecionados</div>
+    <div><div class="text-2xl mb-1">🛒</div>Compra em sites oficiais</div>
+    <div><div class="text-2xl mb-1">⚡</div>Ofertas atualizadas</div>
+  </div>
+</section>
+<main id="produtos" class="max-w-5xl mx-auto px-4 pt-12 pb-10">
+  <div class="flex items-end justify-between gap-3 mb-5">
+    <h2 class="text-xl md:text-2xl font-black">Achadinhos em destaque</h2>
+    <span class="text-xs text-slate-400">${vitrine.length} produto${vitrine.length > 1 ? 's' : ''}</span>
+  </div>
+  <input type="search" placeholder="🔎 Buscar produto..." oninput="filtrar(this.value)" class="w-full mb-5 p-3.5 rounded-xl border border-slate-200 bg-white text-sm outline-none focus:ring-2 focus:ring-indigo-400">
+  <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 md:gap-5">
+    ${vitrine.map(item => {
+        const href = esc(item.linkCompra || item.link);
+        return `
+    <article data-nome="${esc(String(item.nome).toLowerCase())}" class="card bg-white rounded-2xl overflow-hidden border border-slate-100 flex flex-col">
+      <a href="${href}" target="_blank" rel="noopener sponsored" class="relative block">
+        <span class="absolute top-2 left-2 z-10 bg-rose-500 text-white text-[10px] font-extrabold px-2 py-1 rounded-full">OFERTA</span>
+        <img src="${item.img}" alt="${esc(item.nome)}" loading="lazy" onerror="this.onerror=null;this.src='${placeholderPadrao}'" class="w-full aspect-square object-contain bg-white p-2">
+      </a>
+      <div class="p-3 flex flex-col flex-1">
+        <h3 class="text-[13px] font-bold leading-snug line-clamp-3 mb-3">${esc(item.nome)}</h3>
+        <a href="${href}" target="_blank" rel="noopener sponsored" class="mt-auto block text-center bg-gradient-to-r from-emerald-500 to-green-600 text-white py-2.5 rounded-xl text-xs font-extrabold uppercase tracking-wide shadow">Ver oferta →</a>
+      </div>
+    </article>`;
+    }).join('')}
+  </div>
+  <p id="vazio" class="hidden text-center text-slate-400 py-10">Nenhum produto encontrado.</p>
+</main>
+<footer class="bg-slate-900 text-slate-400 text-center text-[11px] px-5 py-8">
+  <p class="font-bold text-white text-sm mb-3">${titulo}</p>
+  <div class="max-w-xl mx-auto mb-4 p-4 rounded-xl bg-white/5 border border-white/10 text-left">
+    <p class="text-white font-bold text-xs mb-2 text-center">✨ Além dos achadinhos, também vendo produtos de minha autoria</p>
+    <ul class="space-y-1 text-slate-300">
+      <li>📚 Materiais digitais educativos</li>
+      <li>🎵 Criação de música para eventos</li>
+      <li>📱 Aplicativos não instaláveis</li>
+    </ul>
+  </div>
+  <p class="max-w-xl mx-auto">Como afiliado, posso receber comissão pelas compras feitas através dos links desta página, sem custo adicional para você. Preços e disponibilidade podem mudar a qualquer momento nos sites das lojas.</p>
+</footer>
+<script>
+function filtrar(v){v=v.toLowerCase().trim();var n=0;document.querySelectorAll('[data-nome]').forEach(function(c){var ok=c.getAttribute('data-nome').indexOf(v)>-1;c.style.display=ok?'':'none';if(ok)n++;});document.getElementById('vazio').classList.toggle('hidden',n>0);}
+<\/script>
+</body>
+</html>`;
+
+            if (window.AndroidBridge && typeof window.AndroidBridge.salvarArquivo === 'function') {
+                window.AndroidBridge.salvarArquivo('achadinhos.html', html);
+                return;
+            }
+
+            const blob = new Blob([html], {type: 'text/html'});
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'achadinhos.html';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+
+        renderizar();
+    </script>
+</body>
+</html>
